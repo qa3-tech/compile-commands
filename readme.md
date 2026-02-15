@@ -1,126 +1,290 @@
-# Simple Compile Commands Generator
+# Compile Commands & Simple Build
 
-A lightweight solution for generating `compile_commands.json` for C projects without the overhead of complex build systems.
+A lightweight solution for C/C++ projects that does two things well:
 
-## Why This Exists
+1. Generate `compile_commands.json` for LSP/editor support
+2. Actually build your project
 
-**The Problem**: Modern editors and LSP servers need a `compile_commands.json` file to provide proper C language support (syntax highlighting, error checking, code completion, go-to-definition, etc.). However, generating this file typically requires:
+No makefiles. No CMake. No build system sprawl. Just one YAML config.
 
-- Setting up CMake (overkill for simple projects)
-- Learning complex build system syntax
-- Installing heavy tooling like `bear` or `compiledb`
-- Dealing with build system quirks and edge cases
+## The Problem
 
-**The Solution**: For simple C projects, you shouldn't need a complex build system just to get basic editor support. This tool lets you describe your project structure in a simple YAML file and generates the JSON that LSP servers require.
+Modern editors need `compile_commands.json` for C/C++ language support. Building requires compilation and linking. The industry's answer? CMake, Ninja, Meson, Bazel, Make, and countless other complex tools.
 
-## When to Use This
+For most projects, this is massive overkill.
 
-✅ **Perfect for:**
-- Small to medium C projects
-- Personal/hobby projects
-- Learning projects and tutorials
-- Prototypes and experiments
-- Projects with straightforward compilation needs
+## The Solution
 
-❌ **Not ideal for:**
-- Large, complex codebases with intricate build requirements
-- Projects that already use CMake/Meson/Autotools effectively
-- Cross-compilation or embedded development
-- Projects with complex conditional compilation
+Describe your project once in `project.yaml`. Then:
+
+- Generate compile commands for your editor
+- Build debug or release binaries
+- Watch for changes and regenerate automatically
+- Use terminal scripts for everything else
+
+## Installation
+
+```bash
+git clone https://github.com/qa3-tech/compile-commands.git
+cd compile-commands
+pip install pyyaml
+```
 
 ## Quick Start
 
-1. **Install dependency:**
-   ```bash
-   pip install pyyaml
-   ```
-
-2. **Create `project.yaml`:**
-   ```yaml
-   project:
-     name: my-project
-     language: c
-     standard: c99
-
-   compiler:
-     flags: ["-Wall", "-Wextra", "-g"]
-     defines: ["_GNU_SOURCE"]
-
-   source_groups:
-     - name: main
-       source_dirs: ["src/"]
-       include_dirs: ["include/"]
-   ```
-
-3. **Generate compile commands:**
-   ```bash
-   python generate_compile_commands.py
-   ```
-
-
-## Configuration
-
-### Basic Structure
-
-The `project.yaml` file has four main sections:
-
-- **`project`**: Basic project metadata
-- **`compiler`**: Global compiler settings
-- **`source_groups`**: Map source directories to their include paths
-- **`dependencies`**: External include directories
-
-### Source Groups
-
-The key feature is **source groups** - they let you specify different include paths for different parts of your project:
+**1. Create `project.yaml`:**
 
 ```yaml
+project:
+  name: my-project
+  language: c
+  standard: c11
+
+compiler:
+  compiler_path: gcc
+  flags: ["-Wall", "-Wextra", "-g"]
+  defines: ["_GNU_SOURCE"]
+
 source_groups:
-  # Main code only needs project headers
   - name: main
     source_dirs: ["src/"]
     include_dirs: ["include/"]
-    
-  # Tests need both project headers and test utilities
+    flags: []
+    defines: []
+
   - name: tests
     source_dirs: ["tests/"]
     include_dirs: ["include/", "tests/"]
-    flags: ["-DTESTING"]
+    flags: []
+    defines: ["UNIT_TESTING"]
+
+dependencies:
+  external_includes: []
+
+build:
+  output: "myapp"
+
+  linker:
+    flags: ["-lm"]
+
+  modes:
+    debug:
+      output_dir: "build/debug"
+      output_name: "myapp_debug"
+      source_groups: ["main", "tests"]
+      extra_flags: []
+      linker_flags: []
+
+    release:
+      output_dir: "build/release"
+      source_groups: ["main"]
+      extra_flags: ["-O3", "-DNDEBUG"]
+      linker_flags: ["-s"]
 ```
 
-### External Dependencies
+See `EXAMPLES.md` for more configurations (Clang, ARM, MinGW, RISC-V, etc).
 
-Add system or library include paths as needed:
+**2. Generate compile commands for LSP:**
+
+```bash
+python compile_commands_generate.py
+```
+
+**3. Build your project:**
+
+```bash
+python compile_commands_build.py --mode debug
+python compile_commands_build.py --mode release
+```
+
+**4. Watch for changes (optional):**
+
+```bash
+python compile_commands_watch.py
+```
+
+## Scripts
+
+### Generate (`compile_commands_generate.py`)
+
+Generates `compile_commands.json` for LSP servers (clangd, ccls, etc).
+
+```bash
+python compile_commands_generate.py
+python compile_commands_generate.py --verbose
+python compile_commands_generate.py --config my_project.yaml --output build/compile_commands.json
+```
+
+### Build (`compile_commands_build.py`)
+
+Compiles and links your project.
+
+```bash
+# Basic usage
+python compile_commands_build.py --mode debug
+python compile_commands_build.py --mode release
+
+# Parallel compilation (default: all CPU cores)
+python compile_commands_build.py --mode debug -j4
+python compile_commands_build.py --mode release --jobs 8
+
+# Clean build artifacts
+python compile_commands_build.py --clean
+python compile_commands_build.py --clean --mode debug
+
+# Verbose output
+python compile_commands_build.py --mode debug --verbose
+```
+
+### Watch (`compile_commands_watch.py`)
+
+Watches source/include directories and regenerates `compile_commands.json` on changes.
+
+```bash
+python compile_commands_watch.py
+python compile_commands_watch.py --interval 5
+python compile_commands_watch.py --config my_project.yaml
+```
+
+Press `Ctrl+C` to stop.
+
+## Configuration Reference
+
+### Project Section
 
 ```yaml
-dependencies:
-  external_includes:
-    - "/usr/include"
-    - "/usr/local/include"
-    - "/usr/include/openssl"  # For specific libraries
+project:
+  name: my-project
+  language: c # or c++
+  standard: c11 # c99, c11, c17, c++11, c++17, c++20, etc.
 ```
 
-## Examples
+### Compiler Section
 
-See `example_project.yaml` for a complete example of an HTTP server project with multiple source groups.
+```yaml
+compiler:
+  compiler_path: gcc # optional, defaults to gcc/g++
+  flags: ["-Wall", "-Wextra", "-g"]
+  defines: ["_GNU_SOURCE", "DEBUG"]
+```
 
-## How It Works
+### Source Groups
 
-1. **Scans** your source directories for `.c` files
-2. **Maps** each source file to its appropriate include paths based on source groups
-3. **Generates** a `compile_commands.json` with the exact compilation commands LSP servers expect
-4. **No actual compilation** - just generates the metadata for language servers
+```yaml
+source_groups:
+  - name: main
+    source_dirs: ["src/"]
+    include_dirs: ["include/"]
+    flags: []
+    defines: []
 
-## Philosophy
+  - name: tests
+    source_dirs: ["tests/"]
+    include_dirs: ["include/", "tests/"]
+    flags: []
+    defines: ["TESTING"]
+```
 
-Sometimes the simplest solution is the best solution. Not every C project needs a full build system - sometimes you just want your editor to understand your code structure without jumping through hoops.
+### Build Section
 
-This tool embraces the Unix philosophy: do one thing well. It generates compile commands, nothing more, nothing less.
+```yaml
+build:
+  output: "myapp"
+
+  linker:
+    flags: ["-lm", "-lpthread"]
+
+  modes:
+    debug:
+      output_dir: "build/debug"
+      output_name: "myapp_debug" # optional
+      source_groups: ["main", "tests"] # REQUIRED
+      extra_flags: []
+      linker_flags: []
+
+    release:
+      output_dir: "build/release"
+      source_groups: ["main"] # REQUIRED
+      extra_flags: ["-O3", "-DNDEBUG", "-flto"]
+      linker_flags: ["-s", "-flto"]
+```
+
+**Important:** `source_groups` is required for each mode — explicitly control what gets compiled.
+
+## Environment Variables
+
+Both scripts respect standard C/C++ environment variables:
+
+| YAML Config              | Environment Variable  | Purpose              |
+| ------------------------ | --------------------- | -------------------- |
+| `compiler.compiler_path` | `CC` / `CXX`          | Compiler executable  |
+| `compiler.flags`         | `CFLAGS` / `CXXFLAGS` | Compilation flags    |
+| `compiler.defines`       | `CPPFLAGS`            | Preprocessor defines |
+| `build.linker.flags`     | `LDFLAGS`             | Linker flags         |
+
+Environment variables override config:
+
+```bash
+CC=clang python compile_commands_generate.py
+CC=clang python compile_commands_build.py --mode debug
+```
+
+## Cross-Compilation
+
+```bash
+# ARM
+CC=arm-linux-gnueabihf-gcc python compile_commands_generate.py
+CC=arm-linux-gnueabihf-gcc python compile_commands_build.py --mode release
+
+# Windows (MinGW)
+CC=x86_64-w64-mingw32-gcc python compile_commands_generate.py
+CC=x86_64-w64-mingw32-gcc python compile_commands_build.py --mode release
+
+# RISC-V
+CC=riscv64-unknown-elf-gcc python compile_commands_generate.py
+CC=riscv64-unknown-elf-gcc python compile_commands_build.py --mode release
+```
+
+Or set in YAML:
+
+```yaml
+compiler:
+  compiler_path: "arm-linux-gnueabihf-gcc"
+  flags: ["-march=armv7-a", "-mfpu=neon"]
+```
+
+## What This Does Well
+
+✅ **Perfect for:**
+
+- Small to medium C/C++ projects
+- Learning projects and tutorials
+- Prototypes and experiments
+- Embedded development
+- Projects where you want explicit control
+
+✅ **Benefits:**
+
+- One config file for everything
+- Simple and transparent
+- No hidden magic — just runs gcc/clang
+- Standard environment variables
+- Easy cross-compilation
+- Parallel compilation
+- Explicit control over build composition
 
 ## Limitations
 
-- **No linking**: Only generates compilation commands, not linking
-- **No dependency tracking**: Won't rebuild when headers change  
-- **No conditional compilation**: All files get the same treatment within a source group
-- **Basic file discovery**: Simple recursive search, no complex filtering
+❌ **Not ideal for:**
 
-For projects that outgrow these limitations, graduate to a proper build system like CMake or Meson.
+- Large codebases with complex dependencies
+- Projects needing incremental builds
+- Projects already using CMake/Meson effectively
+
+For projects that outgrow these limitations, graduate to CMake or Meson.
+
+## Philosophy
+
+Not every C project needs a complex build system. Most just need to compile source files, link them together, and let the editor understand the code structure.
+
+This tool embraces the Unix philosophy: do one thing well. Three simple scripts, one config file, standard environment variables, zero complexity.

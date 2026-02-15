@@ -3,14 +3,14 @@
 Simple compile_commands.json generator for C projects
 
 Reads project.yaml and generates compile_commands.json for LSP servers.
-Much simpler than dealing with complex build systems for basic projects.
+Uses standard C/C++ environment variables for cross-compilation support.
 """
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
-from typing import Any
 
 try:
     import yaml
@@ -19,7 +19,7 @@ except ImportError:
     sys.exit(1)
 
 
-def load_config(config_file: str) -> dict[str, Any]:
+def load_config(config_file: str):
     """Load configuration from YAML file."""
     config_path = Path(config_file)
 
@@ -33,6 +33,38 @@ def load_config(config_file: str) -> dict[str, Any]:
     except yaml.YAMLError as e:
         print(f"Error: Invalid YAML in '{config_file}': {e}")
         sys.exit(1)
+
+
+def setup_environment(config) -> dict[str, str]:
+    """Set up environment variables from config (respects existing env vars)."""
+    env = os.environ.copy()
+
+    # Determine language
+    language = config.get("project", {}).get("language", "c")
+    is_cpp = language in ["c++", "cpp", "cxx"]
+
+    # CC/CXX: Compiler path (only if not already set)
+    compiler_var = "CXX" if is_cpp else "CC"
+    if compiler_var not in env:
+        compiler_path = config.get("compiler", {}).get(
+            "compiler_path", "g++" if is_cpp else "gcc"
+        )
+        env[compiler_var] = compiler_path
+
+    # CFLAGS/CXXFLAGS: Compilation flags (only if not already set)
+    flags_var = "CXXFLAGS" if is_cpp else "CFLAGS"
+    if flags_var not in env:
+        flags: list[str] = config.get("compiler", {}).get("flags", [])
+        env[flags_var] = " ".join(flags)
+
+    # CPPFLAGS: Preprocessor flags (defines) - only if not already set
+    if "CPPFLAGS" not in env:
+        defines: list[str] = config.get("compiler", {}).get("defines", [])
+        cppflags = " ".join(f"-D{d}" for d in defines)
+        if cppflags:
+            env["CPPFLAGS"] = cppflags
+
+    return env
 
 
 def find_source_files(
@@ -58,25 +90,32 @@ def find_source_files(
 
 
 def build_compile_command(
-    file_path: Path, config: dict[str, Any], group_config: dict[str, Any]
+    file_path: Path, config, group_config, env: dict[str, str]
 ) -> dict[str, str]:
-    """Build a compile command entry for a single file."""
+    """Build a compile command entry for a single file using env vars."""
 
-    # Start with the compiler
-    compiler = config.get("compiler", {}).get("compiler_path", "gcc")
+    # Determine language
+    language = config.get("project", {}).get("language", "c")
+    is_cpp = language in ["c++", "cpp", "cxx"]
 
-    # Build the command parts
-    cmd_parts = [compiler]
+    # Start with the compiler from environment
+    compiler = str(env.get("CXX" if is_cpp else "CC"))
+    cmd_parts: list[str] = [compiler]
 
     # Add language standard
     project_config = config.get("project", {})
     if "standard" in project_config:
         cmd_parts.append(f"-std={project_config['standard']}")
 
-    # Add global compiler flags
-    compiler_config = config.get("compiler", {})
-    global_flags = compiler_config.get("flags", [])
-    cmd_parts.extend(global_flags)
+    # Add compilation flags from environment
+    if is_cpp and "CXXFLAGS" in env:
+        cmd_parts.extend(env["CXXFLAGS"].split())
+    elif "CFLAGS" in env:
+        cmd_parts.extend(env["CFLAGS"].split())
+
+    # Add preprocessor flags from environment
+    if "CPPFLAGS" in env:
+        cmd_parts.extend(env["CPPFLAGS"].split())
 
     # Add group-specific flags
     group_flags = group_config.get("flags", [])
@@ -92,11 +131,6 @@ def build_compile_command(
     external_includes = dependencies_config.get("external_includes", [])
     for ext_include in external_includes:
         cmd_parts.append(f"-I{ext_include}")
-
-    # Add global defines
-    global_defines = compiler_config.get("defines", [])
-    for define in global_defines:
-        cmd_parts.append(f"-D{define}")
 
     # Add group-specific defines
     group_defines = group_config.get("defines", [])
@@ -130,7 +164,24 @@ def generate_compile_commands(
     # Load configuration from YAML
     config = load_config(config_file)
 
+    # Set up environment variables from config
+    env = setup_environment(config)
+
+    if verbose:
+        print("Environment variables:")
+        for var in ["CC", "CXX", "CFLAGS", "CXXFLAGS", "CPPFLAGS"]:
+            if var in env:
+                print(f"  {var}={env[var]}")
+        print()
+
     compile_commands: list[dict[str, str]] = []
+
+    # Determine file extensions based on language
+    language = config.get("project", {}).get("language", "c")
+    if language in ["c++", "cpp", "cxx"]:
+        extensions = [".cpp", ".cc", ".cxx"]
+    else:
+        extensions = [".c"]
 
     # Process each source group
     source_groups = config.get("source_groups", [])
@@ -141,14 +192,14 @@ def generate_compile_commands(
 
         # Find source files for this group
         source_dirs = group.get("source_dirs", [])
-        source_files = find_source_files(source_dirs)
+        source_files = find_source_files(source_dirs, extensions)
 
         if verbose:
             print(f"  Found {len(source_files)} source files")
 
         # Generate compile commands for each file
         for source_file in source_files:
-            cmd = build_compile_command(source_file, config, group)
+            cmd = build_compile_command(source_file, config, group, env)
             compile_commands.append(cmd)
             if verbose:
                 print(f"    {source_file}")
@@ -159,7 +210,7 @@ def generate_compile_commands(
 def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Generate compile_commands.json from project.yaml"
+        description="Generate compile_commands.json from project.yaml using environment variables"
     )
     parser.add_argument(
         "--config",
